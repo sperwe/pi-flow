@@ -41,21 +41,28 @@ function parseModel(value: unknown): string | undefined {
   return optionalString(value);
 }
 
-function parseToolList(value: unknown): string[] | "invalid" {
+function parseCommaSeparatedList(value: unknown): string[] | "invalid" {
   if (typeof value !== "string") {
     return "invalid";
   }
-  const tools: string[] = [];
+  const values: string[] = [];
   const seen = new Set<string>();
   for (const rawValue of value.split(",")) {
-    const tool = rawValue.trim();
-    if (!tool || seen.has(tool)) {
+    const item = rawValue.trim();
+    if (!item || seen.has(item)) {
       continue;
     }
-    seen.add(tool);
-    tools.push(tool);
+    seen.add(item);
+    values.push(item);
   }
-  return tools.length > 0 ? tools : "invalid";
+  return values.length > 0 ? values : "invalid";
+}
+
+function parseOptionalBoolean(value: unknown): boolean | undefined | "invalid" {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return typeof value === "boolean" ? value : "invalid";
 }
 
 function parseProfileFile(filePath: string, name: string, options: { requireBody: boolean }): SubagentProfile | undefined {
@@ -82,10 +89,20 @@ function parseProfileFile(filePath: string, name: string, options: { requireBody
   const model = parseModel(parsed.frontmatter.model);
   const thinking = parseThinking(parsed.frontmatter.thinking);
   const tools = Object.prototype.hasOwnProperty.call(parsed.frontmatter, "tools")
-    ? parseToolList(parsed.frontmatter.tools)
+    ? parseCommaSeparatedList(parsed.frontmatter.tools)
+    : undefined;
+  const inheritSkills = parseOptionalBoolean(parsed.frontmatter.inheritSkills);
+  const skills = Object.prototype.hasOwnProperty.call(parsed.frontmatter, "skills")
+    ? parseCommaSeparatedList(parsed.frontmatter.skills)
     : undefined;
 
-  if (!description || tools === "invalid" || (options.requireBody && !body)) {
+  if (
+    !description ||
+    tools === "invalid" ||
+    inheritSkills === "invalid" ||
+    skills === "invalid" ||
+    (options.requireBody && !body)
+  ) {
     return undefined;
   }
 
@@ -96,6 +113,8 @@ function parseProfileFile(filePath: string, name: string, options: { requireBody
     model,
     thinking,
     tools,
+    inheritSkills,
+    skills,
     systemPrompt: body || undefined,
   };
 }

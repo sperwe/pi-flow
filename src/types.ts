@@ -12,6 +12,8 @@ export interface SubagentProfile {
   model?: string;
   thinking?: ThinkingLevel;
   tools?: string[];
+  inheritSkills?: boolean;
+  skills?: string[];
   systemPrompt?: string;
 }
 

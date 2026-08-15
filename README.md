@@ -47,6 +47,8 @@ The active Tool row shows queued and running work. Pi receives the final Tool re
 
 Profiles live at `~/.pi/agent/subagents/<name>.md`. The filename becomes the profile name. Codex and Claude profiles bypass their native permission prompts, so use them only in trusted repositories.
 
+Pi-backed profiles inherit the ambient Skill catalog by default. Set `inheritSkills: false` to give a child no Skills, or set `skills: skill-a, skill-b` to expose only those names from the discovered catalog. An explicit `skills` list takes precedence over `inheritSkills`. These fields affect Pi-backed children only.
+
 **Pi explorer**
 
 ```md

@@ -265,6 +265,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<Subage
   const appendPrompts = [
     profile.systemPrompt,
   ].filter((value): value is string => Boolean(value));
+  const requestedSkillNames = profile.skills === undefined ? undefined : new Set(profile.skills);
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -275,6 +276,15 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<Subage
         (extension) => !excludeTools.some((name) => extension.tools.has(name)),
       ),
     }),
+    skillsOverride: (base) => {
+      if (requestedSkillNames !== undefined) {
+        return {
+          ...base,
+          skills: base.skills.filter((skill) => requestedSkillNames.has(skill.name)),
+        };
+      }
+      return profile.inheritSkills === false ? { ...base, skills: [] } : base;
+    },
     appendSystemPromptOverride: (base) => [...base, ...appendPrompts],
   });
   await resourceLoader.reload();

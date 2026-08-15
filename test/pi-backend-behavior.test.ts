@@ -76,6 +76,85 @@ Custom Code Searcher Role`);
     disposeSession(session);
   });
 
+  it("filters the child Skill catalog from profile frontmatter", async () => {
+    const skillsDir = join(agentDir, "skills");
+    const subagentsDir = join(agentDir, "subagents");
+    mkdirSync(join(skillsDir, "skill-one"), { recursive: true });
+    mkdirSync(join(skillsDir, "skill-two"), { recursive: true });
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(join(skillsDir, "skill-one", "SKILL.md"), `---
+name: skill-one
+description: First fixture skill.
+---
+
+FIRST_SKILL_BODY`);
+    writeFileSync(join(skillsDir, "skill-two", "SKILL.md"), `---
+name: skill-two
+description: Second fixture skill.
+---
+
+SECOND_SKILL_BODY`);
+    writeFileSync(join(subagentsDir, "no-skills.md"), `---
+description: Child without ambient Skills.
+inheritSkills: false
+---
+`);
+    writeFileSync(join(subagentsDir, "one-skill.md"), `---
+description: Child with one selected Skill.
+inheritSkills: false
+skills: skill-two
+---
+`);
+    writeFileSync(join(subagentsDir, "default-skills.md"), `---
+description: Child with default Skill inheritance.
+---
+`);
+
+    const { session, registration, model, modelRegistry } = await createSession();
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    let noSkillsContext: Context | undefined;
+    let oneSkillContext: Context | undefined;
+    let defaultSkillsContext: Context | undefined;
+
+    await executeSubagentTask(
+      session,
+      registration,
+      context,
+      { label: "No skills", profile: "no-skills", prompt: "Inspect context." },
+      async (providerContext) => {
+        noSkillsContext = providerContext;
+        return fauxAssistantMessage("no skills done");
+      },
+    );
+    await executeSubagentTask(
+      session,
+      registration,
+      context,
+      { label: "One skill", profile: "one-skill", prompt: "Inspect context." },
+      async (providerContext) => {
+        oneSkillContext = providerContext;
+        return fauxAssistantMessage("one skill done");
+      },
+    );
+    await executeSubagentTask(
+      session,
+      registration,
+      context,
+      { label: "Default skills", profile: "default-skills", prompt: "Inspect context." },
+      async (providerContext) => {
+        defaultSkillsContext = providerContext;
+        return fauxAssistantMessage("default skills done");
+      },
+    );
+
+    expect(noSkillsContext?.systemPrompt).not.toContain("<available_skills>");
+    expect(oneSkillContext?.systemPrompt).toContain("<name>skill-two</name>");
+    expect(oneSkillContext?.systemPrompt).not.toContain("<name>skill-one</name>");
+    expect(defaultSkillsContext?.systemPrompt).toContain("<name>skill-one</name>");
+    expect(defaultSkillsContext?.systemPrompt).toContain("<name>skill-two</name>");
+    disposeSession(session);
+  });
+
   it("preserves project append prompts without exposing delegation tools", async () => {
     mkdirSync(join(cwd, ".pi"), { recursive: true });
     writeFileSync(join(cwd, ".pi", "APPEND_SYSTEM.md"), "Project append marker.");

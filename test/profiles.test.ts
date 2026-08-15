@@ -81,6 +81,8 @@ Custom explorer role.`);
     writeFileSync(join(subagentsDir, "code-reviewer.md"), `---
 description: Reviews code changes for correctness.
 tools: read, bash
+inheritSkills: false
+skills: showsignature, workflow-guide, showsignature
 model: inherit
 thinking: low
 ---
@@ -140,6 +142,18 @@ tools: []
 ---
 
 Ignored.`);
+    writeFileSync(join(subagentsDir, "bad-inherit-skills.md"), `---
+description: Non-boolean inheritSkills is invalid.
+inheritSkills: "false"
+---
+
+Ignored.`);
+    writeFileSync(join(subagentsDir, "blank-skills.md"), `---
+description: Blank skills is invalid.
+skills: ""
+---
+
+Ignored.`);
     writeFileSync(join(subagentsDir, "malformed-yaml.md"), `---
 description: : : oops
   bad: [unclosed
@@ -157,6 +171,8 @@ description: Valid frontmatter but empty body.
       name: "code-reviewer",
       description: "Reviews code changes for correctness.",
       tools: ["read", "bash"],
+      inheritSkills: false,
+      skills: ["showsignature", "workflow-guide"],
       thinking: "low",
       systemPrompt: "You are a careful code reviewer.",
     });
@@ -187,6 +203,8 @@ description: Valid frontmatter but empty body.
     expect(profiles.has("empty-string-tools")).toBe(false);
     expect(profiles.has("list-tools")).toBe(false);
     expect(profiles.has("empty-list-tools")).toBe(false);
+    expect(profiles.has("bad-inherit-skills")).toBe(false);
+    expect(profiles.has("blank-skills")).toBe(false);
     expect(profiles.has("malformed-yaml")).toBe(false);
     expect(profiles.has("general-purpose")).toBe(true);
     expect(profiles.has("explorer")).toBe(false);
