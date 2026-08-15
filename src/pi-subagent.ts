@@ -52,6 +52,7 @@ import {
   type AgentTerminalTaskEnvelope,
 } from "./core/task-manager.ts";
 import { createRunWorkflowTool } from "./pi-workflow.ts";
+import { stripInactiveFlowPromptFromProviderPayload } from "./provider-prompt.ts";
 import { buildFlowPrompt } from "./prompts.ts";
 import { getSubagentProfiles } from "./profiles.ts";
 import type {
@@ -718,6 +719,8 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         systemPrompt: [event.systemPrompt, buildFlowPrompt(profiles, savedWorkflows)].join("\n\n"),
       };
     });
+
+    pi.on("before_provider_request", (event) => stripInactiveFlowPromptFromProviderPayload(event.payload));
   };
 }
 
