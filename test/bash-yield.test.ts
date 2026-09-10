@@ -108,7 +108,7 @@ describe("pi bash yield extension", () => {
     await new Promise((resolve) => setTimeout(resolve, 90));
 
     expect(harness.messages).toHaveLength(1);
-    expect(harness.messages[0].options).toMatchObject({ triggerTurn: true, deliverAs: "nextTurn" });
+    expect(harness.messages[0].options).toMatchObject({ triggerTurn: true, deliverAs: "followUp" });
     expect(harness.messages[0].message.content).toContain("done");
     expect(harness.messages[0].message.content).toContain("Background shell work finished");
   });
@@ -152,10 +152,9 @@ describe("pi bash yield extension", () => {
       harness.ctx,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
     const collected = await harness.tool("task_output").execute(
       "output-2",
-      { task_id: result.details.taskId },
+      { task_id: result.details.taskId, wait: true, wait_timeout: 1 },
       undefined,
       undefined,
       harness.ctx,

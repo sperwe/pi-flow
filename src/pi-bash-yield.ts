@@ -386,7 +386,6 @@ export function createBashYieldExtension(options: BashYieldOptions = {}) {
     let promptPendingSince = 0;
     let promptGateTimer: NodeJS.Timeout | undefined;
     let compacting = false;
-    let uiPromptBusy = false;
     let shuttingDown = false;
     let wakeTimer: NodeJS.Timeout | undefined;
 
@@ -433,7 +432,6 @@ export function createBashYieldExtension(options: BashYieldOptions = {}) {
         agentBusy ||
         promptPending ||
         compacting ||
-        uiPromptBusy ||
         pendingWakeIds.size === 0
       ) {
         return;
@@ -463,7 +461,7 @@ export function createBashYieldExtension(options: BashYieldOptions = {}) {
           display: true,
           details: { taskIds: ready.map((task) => task.id) },
         },
-        { triggerTurn: true, deliverAs: "nextTurn" },
+        { triggerTurn: true, deliverAs: "followUp" },
       );
     };
 
@@ -818,15 +816,6 @@ export function createBashYieldExtension(options: BashYieldOptions = {}) {
     });
     pi.on("session_before_compact", () => {
       compacting = true;
-      return undefined;
-    });
-    pi.on("ui_prompt_start", () => {
-      uiPromptBusy = true;
-      return undefined;
-    });
-    pi.on("ui_prompt_end", () => {
-      uiPromptBusy = false;
-      scheduleWake();
       return undefined;
     });
     pi.on("session_shutdown", () => {
