@@ -369,17 +369,17 @@ export function extractFinalAssistantText(messages: readonly unknown[]): string 
  * success would mark such a run "done" with empty output and zero tokens.
  *
  * Returns the failure of the LAST assistant turn (the terminal one), or
- * undefined when that turn ended normally ("stop"/"length"/"toolUse").
+ * undefined when that turn ended normally ("stop"/"toolUse").
  */
 export function getFinalAssistantFailure(
   messages: readonly unknown[],
-): { stopReason: "error" | "aborted"; errorMessage?: string } | undefined {
+): { stopReason: "error" | "aborted" | "length"; errorMessage?: string } | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i] as { role?: string; stopReason?: string; errorMessage?: string };
     if (message.role !== "assistant") {
       continue;
     }
-    if (message.stopReason === "error" || message.stopReason === "aborted") {
+    if (message.stopReason === "error" || message.stopReason === "aborted" || message.stopReason === "length") {
       return {
         stopReason: message.stopReason,
         ...(typeof message.errorMessage === "string" && message.errorMessage

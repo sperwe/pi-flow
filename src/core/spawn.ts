@@ -349,7 +349,10 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<Subage
     // "aborted" instead of throwing, so prompt() resolves even when nothing was
     // produced. Treat that terminal failure as an error rather than reporting a
     // hollow "(no final text output)" success.
-    const failure = getFinalAssistantFailure(session.messages);
+    const failure = getFinalAssistantFailure(session.messages)
+      ?? getFinalAssistantFailure(session.sessionManager.getBranch()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message));
     if (failure) {
       // The catch below derives the reported status from whether OUR signal
       // aborted (signal?.aborted ? "aborted" : "error"), so a provider-reported
