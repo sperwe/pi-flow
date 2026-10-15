@@ -107,9 +107,12 @@ describe("pi-subagent tool contract", () => {
 
     const extensions = resourceLoader.getExtensions();
     expect(extensions.errors).toEqual([]);
-    expect(extensions.extensions).toHaveLength(1);
-    expect(extensions.extensions[0]?.flags.has("max-concurrent-subagents")).toBe(true);
-    expect(extensions.extensions[0]?.flags.has("subagent-timeout-ms")).toBe(true);
+    expect(extensions.extensions).toHaveLength(2);
+    const flowExtension = extensions.extensions.find((extension) =>
+      extension.flags.has("max-concurrent-subagents"),
+    );
+    expect(flowExtension?.flags.has("max-concurrent-subagents")).toBe(true);
+    expect(flowExtension?.flags.has("subagent-timeout-ms")).toBe(true);
   });
 
   it("injects every registered profile and workflow without their bodies", async () => {
