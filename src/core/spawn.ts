@@ -20,7 +20,7 @@ import {
 import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
 import type { SubagentProfile, SubagentTelemetry, SubagentToolDetails, SubagentUsage } from "../types.ts";
-import { createTimeoutSignal, markSubagentTimedOut } from "./timeout.ts";
+import { createSafeWrapUpTimer, createTimeoutSignal, markSubagentTimedOut } from "./timeout.ts";
 import { createChildModelRuntime } from "./model-runtime.ts";
 
 /**
@@ -120,6 +120,8 @@ export interface SpawnSubagentParams {
   signal: AbortSignal | undefined;
   /** Maximum wall-clock runtime once this spawn starts. Set 0 to disable. */
   timeoutMs: number;
+  /** Internal deadline shared with the hard abort guard, not a per-call override. */
+  hardDeadlineAt?: number;
   progressEnabled: boolean;
   onProgress: ((result: SubagentToolResult) => void) | undefined;
   onUsage: (usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
@@ -153,7 +155,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<Subage
   const timeout = createTimeoutSignal(params.signal, params.timeoutMs, params.label);
   let result: SubagentToolResult;
   try {
-    result = await spawnSubagentRuntime({ ...params, signal: timeout.signal });
+    result = await spawnSubagentRuntime({ ...params, signal: timeout.signal, hardDeadlineAt: timeout.deadlineAt });
   } finally {
     timeout.cleanup();
   }
@@ -333,6 +335,30 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<Subage
     }
   });
 
+  const wrapUpTimer = createSafeWrapUpTimer(params.timeoutMs, signal, () => {
+    if (!session.isStreaming || (progress && progress.status !== "running")) return;
+    const toolFacts = progress?.toolsCompleted === undefined
+      ? "No verified tool-outcome counts are available."
+      : `Tool calls finished: ${progress.toolsCompleted}; errors: ${progress.toolsFailed ?? 0}; exact repeated failures: ${progress.repeatedFailureCount ?? 0}. These counts do not prove delivery.`;
+    const instruction = [
+      "[Pi Flow safe handoff: hard timeout is approaching]",
+      "Finish the current short operation; do not start fresh research, costly generation, or repeated failed commands.",
+      "Respect all original read-only, approval, and publishing restrictions. Only save changes or update existing project handoff/state files if the original task already permits it; do not invent a new memory file or claim approval.",
+      "Return a final concise status now: verified outputs and file paths, checks actually run, incomplete work, blockers, uncertainty, and a safe next step. If you cannot verify a result, say so. Do not wait until the hard timeout.",
+      toolFacts,
+    ].join("\n");
+    void session.steer(instruction).then(() => {
+      if (signal?.aborted || progress?.status !== "running") return;
+      if (progress) progress.wrapUpRequestedAt = Date.now();
+      emitter.addActivity("Safe handoff request queued before hard timeout");
+      emitter.emitSoon();
+    }).catch(() => {
+      if (signal?.aborted) return;
+      emitter.addActivity("Safe handoff request rejected; hard timeout is still enforced");
+      emitter.emitSoon();
+    });
+  }, params.hardDeadlineAt);
+
   try {
     if (signal?.aborted) {
       throw new Error("Subagent aborted before prompt start");
@@ -343,6 +369,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<Subage
     }
     emitter.emit();
     emitter.startHeartbeat();
+    wrapUpTimer.start();
     await session.prompt(taskPrompt, { source: "extension" });
     // pi-ai encodes model/request failures (rate limits, quota exhaustion,
     // provider errors) as a final assistant turn with stopReason "error"/
@@ -407,6 +434,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<Subage
       ...(progress ? { progress } : {}),
     }, hasPiUsage(usage) ? usage : undefined);
   } finally {
+    wrapUpTimer.stop();
     emitter.stop();
     unsubscribe?.();
     if (signal && abortHandler) {

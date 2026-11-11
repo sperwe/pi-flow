@@ -6,6 +6,7 @@ import type { SubagentBackend, SubagentRunStatus, SubagentTelemetry, SubagentUsa
 export { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "./spinner.ts";
 
 const ACTIVITY_DISPLAY_PREVIEW_CHARS = 120;
+const RECENT_ACTIVITY_PREVIEW_LINES = 6;
 export const RICH_SUBAGENT_ACTIVE_LIMIT = 4;
 
 export interface RenderableSubagentNode {
@@ -17,6 +18,11 @@ export interface RenderableSubagentNode {
   endedAt?: number;
   activity?: string[];
   activityCount?: number;
+  toolsCompleted?: number;
+  toolsFailed?: number;
+  repeatedFailureCount?: number;
+  lastToolFinishedAt?: number;
+  wrapUpRequestedAt?: number;
   result?: string;
   error?: string;
   usage?: SubagentUsage;
@@ -169,6 +175,7 @@ export function renderRichSubagentNode(
   frame: number,
   indent = "",
   now = Date.now(),
+  expanded = false,
 ): Container {
   const container = new Container();
   const status = node.status;
@@ -181,14 +188,36 @@ export function renderRichSubagentNode(
     ),
   );
 
+  if (node.toolsCompleted !== undefined) {
+    const stats = [`tools ${node.toolsCompleted}`, `failed ${node.toolsFailed ?? 0}`];
+    if (node.repeatedFailureCount) stats.push(`repeated failures ${node.repeatedFailureCount}`);
+    if (node.lastToolFinishedAt !== undefined) {
+      stats.push(`last tool ${formatDuration(Math.max(0, now - node.lastToolFinishedAt))} ago`);
+    }
+    container.addChild(new Text(`${indent}  ${theme.fg("muted", stats.join(" · "))}`, 0, 0));
+  }
+  if (node.wrapUpRequestedAt !== undefined) {
+    container.addChild(new Text(
+      `${indent}  ${theme.fg("warning", "Safe handoff requested; awaiting final result")}`,
+      0,
+      0,
+    ));
+  }
+
   const activity = node.activity ?? [];
   const activityCount = node.activityCount ?? activity.length;
-  const skipped = activityCount - activity.length;
-  if (skipped > 0) {
-    container.addChild(new Text(`${indent}  ${theme.fg("muted", `... +${skipped} earlier events`)}`, 0, 0));
+  const visibleActivity = expanded ? activity : activity.slice(-RECENT_ACTIVITY_PREVIEW_LINES);
+  const skipped = Math.max(0, activityCount - visibleActivity.length);
+  if (visibleActivity.length > 0) {
+    const heading = `Recent activity (${visibleActivity.length}/${activityCount})${!expanded && activity.length > visibleActivity.length ? " · expand for more" : ""}`;
+    container.addChild(new Text(`${indent}  ${theme.fg("muted", heading)}`, 0, 0));
   }
-  for (const line of activity) {
-    container.addChild(new TruncatedText(`${indent}  ${theme.fg("muted", formatActivityLineForDisplay(line))}`, 0, 0));
+  if (skipped > 0) {
+    container.addChild(new Text(`${indent}  ${theme.fg("muted", `... ${skipped} older events not shown`)}`, 0, 0));
+  }
+  for (const line of visibleActivity) {
+    const display = `${indent}  ${theme.fg("muted", expanded ? line : formatActivityLineForDisplay(line))}`;
+    container.addChild(expanded ? new Text(display, 0, 0) : new TruncatedText(display, 0, 0));
   }
 
   if (node.error) {
@@ -205,8 +234,9 @@ export function renderSubagentNode(
   runningCount: number,
   indent = "",
   now = Date.now(),
+  expanded = false,
 ): Text | Container {
   return shouldRenderRichSubagent(node, runningCount)
-    ? renderRichSubagentNode(node, theme, frame, indent, now)
+    ? renderRichSubagentNode(node, theme, frame, indent, now, expanded)
     : renderCompactSubagentNode(node, theme, frame, indent, now);
 }

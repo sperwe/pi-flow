@@ -2,10 +2,42 @@ import type { SubagentToolDetails } from "../types.ts";
 
 export interface TimeoutSignalState {
   signal: AbortSignal | undefined;
+  deadlineAt?: number;
   timedOut: () => boolean;
   cleanup: () => void;
 }
 
+const MIN_WRAP_UP_RUNTIME_MS = 10 * 60_000;
+const MAX_WRAP_UP_WINDOW_MS = 5 * 60_000;
+
+export function createSafeWrapUpTimer(
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  requestWrapUp: () => void,
+  hardDeadlineAt?: number,
+): { start(): void; stop(): void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let requested = false;
+
+  return {
+    start() {
+      if (timer || requested || signal?.aborted || timeoutMs < MIN_WRAP_UP_RUNTIME_MS) return;
+      const leadMs = Math.min(MAX_WRAP_UP_WINDOW_MS, Math.floor(timeoutMs / 10));
+      const delayMs = Math.max(0, (hardDeadlineAt ?? Date.now() + timeoutMs) - leadMs - Date.now());
+      timer = setTimeout(() => {
+        timer = undefined;
+        if (requested || signal?.aborted) return;
+        requested = true;
+        requestWrapUp();
+      }, delayMs);
+      timer.unref?.();
+    },
+    stop() {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+    },
+  };
+}
 export function formatDurationMs(ms: number): string {
   if (ms % 3_600_000 === 0) {
     const hours = ms / 3_600_000;
@@ -32,6 +64,7 @@ export function createTimeoutSignal(baseSignal: AbortSignal | undefined, timeout
   }
 
   const timeoutController = new AbortController();
+  const deadlineAt = Date.now() + timeoutMs;
   let timedOut = false;
   let cleanedUp = false;
   const timer = setTimeout(() => {
@@ -62,6 +95,7 @@ export function createTimeoutSignal(baseSignal: AbortSignal | undefined, timeout
 
   return {
     signal,
+    deadlineAt,
     timedOut: () => timedOut,
     cleanup: () => {
       if (cleanedUp) {

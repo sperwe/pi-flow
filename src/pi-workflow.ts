@@ -139,6 +139,7 @@ export interface CreateRunWorkflowToolOptions {
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
   getFlowStatus: () => FlowStatusState;
+  onSnapshot?: (id: string, snapshot: WorkflowToolDetails) => void;
 }
 
 interface WorkflowExecutionResult {
@@ -647,6 +648,7 @@ async function executeWorkflowCall(params: {
   const emit = () => {
     const aggregate = aggregateWorkflowUsage(snapshot.subagents);
     const details = boundedWorkflowSnapshot(snapshot, aggregate.telemetry);
+    options.onSnapshot?.(toolCallId, details);
     const displayName = boundedTextPreview(name, WORKFLOW_METADATA_PREVIEW_CHARS);
     if (onUpdate) {
       onUpdate(workflowSnapshotResult(`Workflow "${displayName}" running.`, details, aggregate.usage, true));
@@ -857,6 +859,7 @@ export function createRunWorkflowTool(
         execution.details,
         execution.usage,
       );
+      options.onSnapshot?.(toolCallId, execution.details);
       return {
         ...result,
         content: taskEnvelopeContent(envelope),

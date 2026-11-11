@@ -1,4 +1,4 @@
-import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { AgentSession, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, type Context } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentTerminalTaskEnvelope } from "../src/core/task-manager.ts";
@@ -85,6 +85,63 @@ describe("direct subagent progress payloads", () => {
 });
 
 describe("pi-subagent progress event parsing", () => {
+  it("counts terminal tool outcomes and flags identical repeated failures without calling them verified milestones", () => {
+    const progress = createProgressNode("Fix quality", "general-purpose", "running", "pi");
+    const start = (id: string, command: string) => updateProgressFromEvent(progress, {
+      type: "tool_execution_start", toolCallId: id, toolName: "bash", args: { command },
+    } as never);
+    const end = (id: string, failed: boolean) => updateProgressFromEvent(progress, {
+      type: "tool_execution_end", toolCallId: id, toolName: "bash", isError: failed, result: {},
+    } as never);
+
+    start("a", "npm test");
+    end("a", true);
+    start("b", "npm test");
+    end("b", true);
+    start("c", "npm test");
+    end("c", false);
+    start("d", "npm test");
+    end("d", true);
+    start("e", "npm run typecheck");
+    end("e", false);
+
+    expect(progress.toolsCompleted).toBe(5);
+    expect(progress.toolsFailed).toBe(3);
+    expect(progress.repeatedFailureCount).toBe(1);
+    expect(progress.lastToolFinishedAt).toBeTypeOf("number");
+    expect(progress).not.toHaveProperty("verifiedMilestoneCount");
+  });
+
+  it("separates parallel tools, successful retries, and oversized inputs", () => {
+    const progress = createProgressNode("Inspect", "general-purpose", "running", "pi");
+    for (const [id, toolName, command] of [["a", "bash", "test"], ["b", "read", "test"]] as const) {
+      updateProgressFromEvent(progress, {
+        type: "tool_execution_start", toolCallId: id, toolName, args: { command },
+      } as never);
+    }
+    updateProgressFromEvent(progress, {
+      type: "tool_execution_end", toolCallId: "b", toolName: "read", isError: true, result: {},
+    } as never);
+    updateProgressFromEvent(progress, {
+      type: "tool_execution_end", toolCallId: "a", toolName: "bash", isError: true, result: {},
+    } as never);
+    expect(progress.repeatedFailureCount ?? 0).toBe(0);
+    expect(progress.toolsFailed).toBe(2);
+    expect(progress.toolsCompleted).toBe(2);
+
+    for (const id of ["large-a", "large-b"]) {
+      updateProgressFromEvent(progress, {
+        type: "tool_execution_start", toolCallId: id, toolName: "bash", args: { command: "a".repeat(5_000) },
+      } as never);
+      updateProgressFromEvent(progress, {
+        type: "tool_execution_end", toolCallId: id, toolName: "bash", isError: true, result: {},
+      } as never);
+    }
+    expect(progress.repeatedFailureCount ?? 0).toBe(0);
+    expect(progress.toolsCompleted).toBe(4);
+    expect(progress.toolsFailed).toBe(4);
+  });
+
   it("extracts streaming assistant text from in-process message_update events", () => {
     // Pi 0.84 strips cumulative fields only in the JSON/RPC encoding; in-process
     // session events still carry assistantMessageEvent.partial and message.
@@ -138,6 +195,109 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     makeExecutionContext,
     terminalEnvelope,
   } = setupPiSubagentTestHarness();
+
+  it("queues a real Pi session steering request before timeout even without TUI progress", { timeout: 15_000 }, async () => {
+    const { session, registration, model, modelRegistry } = await createSession({
+      subagentTimeoutMs: 10 * 60_000,
+    });
+    const gate = deferred();
+    let providerStarted = false;
+    setContextRoutingResponses(registration, async () => {
+      providerStarted = true;
+      await gate.promise;
+      return fauxAssistantMessage("handoff-ready response");
+    });
+    const nativeSetTimeout = globalThis.setTimeout;
+    let wrapUpTick: (() => void) | undefined;
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((handler: any, delay?: number, ...args: any[]) => {
+      if (delay !== undefined && delay > 8 * 60_000 && delay <= 9 * 60_000) {
+        wrapUpTick = handler;
+        return nativeSetTimeout(() => undefined, 10 * 60_000);
+      }
+      return nativeSetTimeout(handler, delay, ...args);
+    });
+    const steer = vi.spyOn(AgentSession.prototype, "steer").mockResolvedValue(undefined);
+    try {
+      const tool = session.getToolDefinition("run_agent") as any;
+      const pending = tool.execute(
+        "soft-handoff-call",
+        { label: "Quality repair", prompt: "Continue safely." },
+        undefined,
+        undefined,
+        makeExecutionContext({ hasUI: false, model, modelRegistry }),
+      );
+      await waitUntil(() => providerStarted);
+      expect(providerStarted).toBe(true);
+      expect(wrapUpTick).toBeDefined();
+      wrapUpTick!();
+      await waitUntil(() => steer.mock.calls.length === 1);
+      expect(steer).toHaveBeenCalledTimes(1);
+      expect(steer.mock.calls[0][0]).toContain("verified outputs and file paths");
+      gate.resolve();
+      const result = await pending;
+      expect(result.details.status).toBe("done");
+      expect(terminalEnvelope(result).status).toBe("completed");
+      expect(steer).toHaveBeenCalledTimes(1);
+    } finally {
+      gate.resolve();
+      timeoutSpy.mockRestore();
+      steer.mockRestore();
+      disposeSession(session);
+    }
+  });
+
+  it("delivers safe wrap-up instructions into the child conversation", { timeout: 15_000 }, async () => {
+    const { session, registration, model, modelRegistry } = await createSession({
+      subagentTimeoutMs: 10 * 60_000,
+    });
+    const gate = deferred();
+    let providerStarted = false;
+    let sawWrapUpInContext = false;
+    let turns = 0;
+    setContextRoutingResponses(registration, async (context) => {
+      turns++;
+      if (turns === 1) {
+        providerStarted = true;
+        await gate.promise;
+        return fauxAssistantMessage("Initial step finished.");
+      }
+      sawWrapUpInContext = JSON.stringify(context.messages).includes("[Pi Flow safe handoff:");
+      return fauxAssistantMessage(sawWrapUpInContext ? "SAFE_HANDOFF_DELIVERED" : "SAFE_HANDOFF_MISSING");
+    });
+
+    const nativeSetTimeout = globalThis.setTimeout;
+    let wrapUpTick: (() => void) | undefined;
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((handler: any, delay?: number, ...args: any[]) => {
+      if (delay !== undefined && delay > 8 * 60_000 && delay <= 9 * 60_000) {
+        wrapUpTick = handler;
+        return nativeSetTimeout(() => undefined, 10 * 60_000);
+      }
+      return nativeSetTimeout(handler, delay, ...args);
+    });
+    try {
+      const tool = session.getToolDefinition("run_agent") as any;
+      const pending = tool.execute(
+        "safe-handoff-delivery",
+        { label: "Complete verified work", prompt: "Return a verified result." },
+        undefined,
+        undefined,
+        makeExecutionContext({ hasUI: false, model, modelRegistry }),
+      );
+      await waitUntil(() => providerStarted && wrapUpTick !== undefined);
+      wrapUpTick!();
+      await delay(10);
+      gate.resolve();
+      const result = await pending;
+      expect(turns).toBeGreaterThan(1);
+      expect(sawWrapUpInContext).toBe(true);
+      expect(result.details.status).toBe("done");
+      expect(result.details.result).toContain("SAFE_HANDOFF_DELIVERED");
+    } finally {
+      gate.resolve();
+      timeoutSpy.mockRestore();
+      disposeSession(session);
+    }
+  });
 
   it("waits for the child and returns the terminal Tool result without extension lifecycle events", async () => {
     const taskStateEvents: unknown[] = [];

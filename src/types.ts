@@ -119,6 +119,11 @@ export interface SubagentProgressNode {
   endedAt?: number;
   activity: string[];
   activityCount: number;
+  toolsCompleted?: number;
+  toolsFailed?: number;
+  repeatedFailureCount?: number;
+  lastToolFinishedAt?: number;
+  wrapUpRequestedAt?: number;
   result?: string;
   error?: string;
   telemetry?: SubagentTelemetry;

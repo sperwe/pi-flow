@@ -6,6 +6,38 @@ import { formatUsage } from "../src/core/subagent-render.ts";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
 describe("pi-subagent synchronous rendering", () => {
+  it("shows observed tool outcomes and a queued safe handoff without implying verified delivery", () => {
+    const agentTool = captureAgentTool();
+    const theme = makeMockTheme();
+    const now = Date.now();
+    const view = renderToText(agentTool.renderResult({
+      content: [{ type: "text", text: "running" }],
+      details: {
+        label: "Quality repair",
+        profile: "general-purpose",
+        backend: "pi",
+        status: "running",
+        activeCount: 1,
+        progress: {
+          label: "Quality repair",
+          profile: "general-purpose",
+          backend: "pi",
+          status: "running",
+          startedAt: now - 200_000,
+          activity: ["Read p03.png", "Thinking..."],
+          activityCount: 425,
+          toolsCompleted: 24,
+          toolsFailed: 3,
+          repeatedFailureCount: 2,
+          lastToolFinishedAt: now - 125_000,
+          wrapUpRequestedAt: now - 90_000,
+        },
+      },
+    }, {}, theme, {}));
+    expect(view).toContain("tools 24 · failed 3 · repeated failures 2 · last tool 2m5s ago");
+    expect(view).toContain("Safe handoff requested; awaiting final result");
+    expect(view).not.toContain("verified milestones");
+  });
   let agentDir = "";
   const { makeMockTheme, renderToText, stripAnsi } = setupPiSubagentTestHarness((state) => {
     agentDir = state.agentDir;
@@ -18,6 +50,7 @@ describe("pi-subagent synchronous rendering", () => {
       registerTool: (tool: any) => {
         if (tool.name === "run_agent") agentTool = tool;
       },
+      registerCommand: () => {},
       registerFlag: (name: string, options: { default?: boolean | string }) => {
         if (options.default !== undefined) flags.set(name, options.default);
       },
@@ -168,7 +201,8 @@ describe("pi-subagent synchronous rendering", () => {
       expect(queued).toContain("◌ Pi Agent(general-purpose, Wait turn) queued 2s");
       expect(running).toContain("Pi Agent(code-searcher: Research repo)");
       expect(running).toContain("2s ↑81k ↓4.9k R602k CH88.1% $0.850");
-      expect(running).toContain("... +2 earlier events");
+      expect(running).toContain("Recent activity (2/4)");
+      expect(running).toContain("... 2 older events not shown");
       expect(running).toContain("Read app.py");
       expect(running).toContain("Read config.yaml");
     } finally {
@@ -212,6 +246,40 @@ describe("pi-subagent synchronous rendering", () => {
       .render(80)
       .map((line: string) => stripAnsi(line))
       .filter((line: string) => line.trim());
-    expect(narrowLines).toHaveLength(2);
+    expect(narrowLines).toHaveLength(3);
+  });
+
+  it("shows six recent activities by default and retains more in expanded view", () => {
+    const agentTool = captureAgentTool();
+    const theme = makeMockTheme();
+    const result = {
+      content: [{ type: "text" as const, text: "running" }],
+      details: {
+        label: "Deployment package",
+        profile: "general-purpose",
+        backend: "pi",
+        status: "running",
+        activeCount: 1,
+        progress: {
+          label: "Deployment package",
+          profile: "general-purpose",
+          backend: "pi",
+          status: "running",
+          startedAt: Date.now(),
+          activity: Array.from({ length: 10 }, (_, index) => `Step ${index + 1}`),
+          activityCount: 60,
+        },
+      },
+    };
+    const compact = renderToText(agentTool.renderResult(result, { expanded: false }, theme, {}));
+    const expanded = renderToText(agentTool.renderResult(result, { expanded: true }, theme, {}));
+    expect(compact).toContain("Recent activity (6/60) · expand for more");
+    expect(compact).toContain("... 54 older events not shown");
+    expect(compact).toContain("Step 5");
+    expect(compact).not.toContain("Step 4");
+    expect(expanded).toContain("Recent activity (10/60)");
+    expect(expanded).toContain("... 50 older events not shown");
+    expect(expanded).toContain("Step 1");
+    expect(expanded).not.toContain("expand for more");
   });
 });

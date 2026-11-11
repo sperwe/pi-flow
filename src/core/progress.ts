@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type {
   SubagentBackend,
@@ -8,7 +9,7 @@ import type {
   SubagentUsage,
 } from "../types.ts";
 
-export const MAX_ACTIVITY_LINES = 2;
+export const MAX_ACTIVITY_LINES = 18;
 export const MAX_ACTIVITY_LINE_CHARS = 240;
 export const MAX_PROGRESS_METADATA_CHARS = 160;
 export const MAX_PROGRESS_RESULT_CHARS = 2_000;
@@ -19,6 +20,34 @@ export const MAX_PROGRESS_UPDATE_JSON_CHARS = 16_384;
 export const MAX_MODEL_VISIBLE_TEXT_CHARS = 32_000;
 export const PROGRESS_UPDATE_INTERVAL_MS = 250;
 export const PROGRESS_HEARTBEAT_INTERVAL_MS = 1000;
+const MAX_FAILED_TOOL_FINGERPRINTS = 32;
+const MAX_FINGERPRINT_ARG_CHARS = 4096;
+
+interface ToolProgressHistory {
+  activeCalls: Map<string, string>;
+  failedCalls: Set<string>;
+}
+
+const toolProgressHistories = new WeakMap<SubagentProgressNode, ToolProgressHistory>();
+
+function progressHistory(progress: SubagentProgressNode): ToolProgressHistory {
+  let history = toolProgressHistories.get(progress);
+  if (!history) {
+    history = { activeCalls: new Map(), failedCalls: new Set() };
+    toolProgressHistories.set(progress, history);
+  }
+  return history;
+}
+
+function toolFingerprint(name: string, args: unknown): string | undefined {
+  try {
+    const json = JSON.stringify(args);
+    if (!json || json.length > MAX_FINGERPRINT_ARG_CHARS) return undefined;
+    return `${name}\0${createHash("sha256").update(json).digest("hex")}`;
+  } catch {
+    return undefined;
+  }
+}
 
 const TRUNCATED_PROGRESS_SUFFIX = " ... [truncated]";
 
@@ -170,6 +199,8 @@ export function updateProgressFromEvent(progress: SubagentProgressNode, event: A
     if (event.toolName === "run_agent") {
       return;
     }
+    const fingerprint = toolFingerprint(event.toolName, event.args);
+    if (fingerprint) progressHistory(progress).activeCalls.set(event.toolCallId, fingerprint);
     const preview = getToolArgPreview(event.args);
     addActivity(progress, `${event.toolName}${preview ? ` ${preview}` : ""}`);
     return;
@@ -185,6 +216,27 @@ export function updateProgressFromEvent(progress: SubagentProgressNode, event: A
   }
 
   if (event.type === "tool_execution_end") {
+    if (event.toolName === "run_agent") return;
+    progress.toolsCompleted = (progress.toolsCompleted ?? 0) + 1;
+    progress.lastToolFinishedAt = Date.now();
+    const history = progressHistory(progress);
+    const fingerprint = history.activeCalls.get(event.toolCallId);
+    history.activeCalls.delete(event.toolCallId);
+    if (event.isError) {
+      progress.toolsFailed = (progress.toolsFailed ?? 0) + 1;
+      if (fingerprint) {
+        if (history.failedCalls.has(fingerprint)) {
+          progress.repeatedFailureCount = (progress.repeatedFailureCount ?? 0) + 1;
+          history.failedCalls.delete(fingerprint);
+        }
+        history.failedCalls.add(fingerprint);
+        if (history.failedCalls.size > MAX_FAILED_TOOL_FINGERPRINTS) {
+          history.failedCalls.delete(history.failedCalls.values().next().value!);
+        }
+      }
+    } else if (fingerprint) {
+      history.failedCalls.delete(fingerprint);
+    }
     return;
   }
 

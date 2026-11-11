@@ -43,6 +43,33 @@ Use a workflow to classify each changed file by risk, run the matching review, a
 
 The active Tool row shows queued and running work. Pi receives the final Tool result after the direct subagent or outer workflow finishes.
 
+During an interactive Pi session, use `/flow-panel` to open or close a non-focusing,
+right-aligned task monitor. `/flow-panel next` and `/flow-panel prev` change the
+selected task; `/flow-panel up` and `/flow-panel down` browse its recent activity.
+This is a Pi 1.5.1 overlay, **not** a terminal multiplexer split pane; it does
+not spawn another agent or change the behavior of `run_agent` / `run_workflow`.
+See [the monitor guide](docs/flow-panel.md) for limits and verification details.
+
+For Pi-backed children with a configured wall-clock limit of at least ten minutes,
+pi-flow now queues **one safe handoff request** before the hard timeout: 10% of
+the limit, capped at five minutes (at the default two-hour limit, after 1h55m).
+The child is asked to stop new exploration, respect its original permissions,
+use existing project handoff files only if authorized, and return verified
+outputs, remaining work, and evidence paths. This is a best-effort queued
+`steer()` message, delivered only when Pi reaches the next steering point;
+it cannot interrupt a stuck tool or guarantee a final answer. The original
+hard timeout and failed-result behavior remain in force. Disabling the timeout
+with `--subagent-timeout-ms 0` disables the handoff timer as well.
+
+Pi-backed task progress also reports completed/failed tool calls and exact
+repeated failed calls (bounded hashed fingerprints, without storing tool
+arguments in progress history). These are **tool-execution observations**, not
+verified project milestones or a quality score. Codex and Claude CLI backends
+still get their existing hard timeout: their one-shot stdin interface does not
+support this safe mid-run steering. No new database, background watchdog, or
+separate model call is introduced, although a delivered steering message may
+consume tokens during the child's normal continuation.
+
 ### Add simple subagents
 
 Profiles live at `~/.pi/agent/subagents/<name>.md`. The filename becomes the profile name. Codex and Claude profiles bypass their native permission prompts, so use them only in trusted repositories.

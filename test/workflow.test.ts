@@ -1030,6 +1030,7 @@ describe("run_workflow tool registration", () => {
     const flags = new Map<string, boolean | string>();
     return {
       registerTool: (tool: { name: string }) => names.push(tool.name),
+      registerCommand: () => {},
       registerMessageRenderer: () => {},
       sendMessage: () => {},
       registerFlag: (name: string, options: { default?: boolean | string }) => {

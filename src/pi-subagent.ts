@@ -23,6 +23,7 @@ import {
   recordFlowUsage,
   type FlowStatusState,
 } from "./core/flow-status.ts";
+import { FlowMonitor, FlowPanelController } from "./core/flow-monitor.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
 import {
   boundedProgressText,
@@ -112,9 +113,11 @@ interface DelegationState {
   sessionKeyLocks: SessionKeyLocks;
   activeRuns: Map<string, ActiveAgentRun>;
   flowStatus: FlowStatusState;
+  monitor: FlowMonitor;
 }
 
 interface ActiveAgentRun {
+  toolCallId: string;
   sessionKey: string;
   progress: SubagentProgressNode;
   frame: number;
@@ -218,6 +221,7 @@ function runningRunCount(state: DelegationState): number {
 }
 
 function emitRunUpdate(state: DelegationState, run: ActiveAgentRun): void {
+  state.monitor.updateAgent(run.toolCallId, run.progress);
   const details = subagentDisplayDetails({
     label: run.progress.label,
     profile: run.progress.profile,
@@ -318,6 +322,7 @@ async function executeAgentCall(params: {
 
   const run: ActiveAgentRun | undefined = onUpdate
     ? {
+        toolCallId,
         sessionKey,
         progress: createProgressNode(label, profileName, "queued", profile.backend),
         frame: 0,
@@ -525,6 +530,17 @@ function createRunAgentTool(
           ? boundedProgressText(details.result ?? "", MAX_MODEL_VISIBLE_TEXT_CHARS)
           : boundedProgressText(details.error ?? managed.abortReason ?? "Subagent failed", MAX_MODEL_VISIBLE_TEXT_CHARS),
       };
+      getState().monitor.updateAgent(toolCallId, details.progress ?? {
+        label,
+        profile: profileName,
+        status: details.status,
+        startedAt: Date.now(),
+        endedAt: Date.now(),
+        activity: [],
+        activityCount: 0,
+        error: details.error,
+        result: details.result,
+      });
       return {
         ...result,
         content: taskEnvelopeContent(envelope),
@@ -544,7 +560,7 @@ function createRunAgentTool(
       const label = normalizeSubagentLabel(args.label) ?? "";
       return new Text(renderAgentIdentity(display, label, theme), 0, 0);
     },
-    renderResult(result, _renderOptions, theme) {
+    renderResult(result, renderOptions, theme) {
       const details = result.details as RunAgentToolDetails;
       const usage = details.usage ?? (result as typeof result & { usage?: SubagentUsage }).usage;
       return renderSubagentNode(
@@ -567,6 +583,9 @@ function createRunAgentTool(
         theme,
         details.frame ?? 0,
         details.activeCount ?? (details.status === "running" ? 1 : 0),
+        "",
+        Date.now(),
+        renderOptions.expanded,
       );
     },
   });
@@ -605,7 +624,9 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       sessionKeyLocks: new SessionKeyLocks(),
       activeRuns: new Map(),
       flowStatus: createFlowStatusState(),
+      monitor: new FlowMonitor(),
     };
+    const panel = new FlowPanelController(rootState.monitor);
     const createTaskManager = () => new SynchronousTaskManager();
     let taskManager = createTaskManager();
     let taskManagerNeedsReset = false;
@@ -648,10 +669,18 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         getThinkingLevel: () => pi.getThinkingLevel(),
         getSubagentTimeoutMs: () => getState().subagentTimeoutMs,
         getFlowStatus: () => rootState.flowStatus,
+        onSnapshot: (id, snapshot) => rootState.monitor.updateWorkflow(id, snapshot),
       }));
     }
 
+    pi.registerCommand("flow-panel", {
+      description: "Toggle PiFlow's live task panel; next/prev switch tasks, up/down browse earlier activity",
+      handler: async (args, ctx) => panel.command(args, ctx),
+    });
+
     pi.on("session_start", (_event, ctx) => {
+      panel.close();
+      rootState.monitor.clear();
       if (taskManagerNeedsReset) {
         taskManager = createTaskManager();
         taskManagerNeedsReset = false;
@@ -689,6 +718,8 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     });
 
     pi.on("session_tree", (_event, ctx) => {
+      panel.close();
+      rootState.monitor.clear();
       taskManager = createTaskManager();
       syncLimiter();
       rootState.sessionBindings.clear();
@@ -699,6 +730,8 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
+      panel.close();
+      rootState.monitor.clear();
       taskManagerNeedsReset = true;
       await getTaskManager().shutdown();
       rootState.activeRuns.clear();
