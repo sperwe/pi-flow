@@ -678,6 +678,35 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       handler: async (args, ctx) => panel.command(args, ctx),
     });
 
+    pi.on("tool_execution_start", (event, ctx) => {
+      if (event.toolName === "run_agent") {
+        rootState.monitor.updateAgent(event.toolCallId, {
+          label: typeof event.args?.label === "string" ? event.args.label : "Subagent",
+          profile: typeof event.args?.profile === "string" ? event.args.profile : "general-purpose",
+          status: "queued",
+          startedAt: Date.now(),
+          activity: [],
+          activityCount: 0,
+        });
+      } else if (event.toolName === "run_workflow" && workflowEnabled) {
+        rootState.monitor.updateWorkflow(event.toolCallId, {
+          name: typeof event.args?.name === "string" ? event.args.name : "Workflow",
+          status: "running",
+          subagentCount: 0,
+          subagentStatusCounts: { queued: 0, running: 0, done: 0, error: 0, aborted: 0 },
+          phaseCount: 0,
+          phases: [],
+          phaseSummaries: [],
+          subagents: [],
+          logCount: 0,
+          logs: [],
+        });
+      } else {
+        return;
+      }
+      panel.open(ctx);
+    });
+
     pi.on("session_start", (_event, ctx) => {
       panel.close();
       rootState.monitor.clear();

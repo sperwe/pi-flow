@@ -43,8 +43,10 @@ Use a workflow to classify each changed file by risk, run the matching review, a
 
 The active Tool row shows queued and running work. Pi receives the final Tool result after the direct subagent or outer workflow finishes.
 
-During an interactive Pi session, use `/flow-panel` to open or close a non-focusing,
-right-aligned task monitor. `/flow-panel next` and `/flow-panel prev` change the
+In an interactive Pi session, starting `run_agent` or `run_workflow` **automatically
+opens** a non-focusing, right-aligned task monitor; no manual command is needed.
+The panel remains visible after the run to allow reviewing its final state.
+`/flow-panel` can still close or reopen it. `/flow-panel next` and `/flow-panel prev` change the
 selected task; `/flow-panel up` and `/flow-panel down` browse its recent activity.
 This is a Pi 1.5.1 overlay, **not** a terminal multiplexer split pane; it does
 not spawn another agent or change the behavior of `run_agent` / `run_workflow`.

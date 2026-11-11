@@ -1,4 +1,4 @@
-import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { SubagentProgressNode, WorkflowToolDetails } from "../types.ts";
 import { formatDuration } from "./subagent-render.ts";
@@ -54,6 +54,7 @@ export class FlowMonitor {
       progress: {
         ...progress,
         label: bounded(progress.label),
+        profile: bounded(progress.profile),
         error: bounded(progress.error),
         result: undefined,
         activity: progress.activity.slice(-MAX_HISTORY).map(bounded),
@@ -198,17 +199,61 @@ export class FlowMonitorPanel implements Component {
 export class FlowPanelController {
   private panel: FlowMonitorPanel | undefined;
   private closePanel: (() => void) | undefined;
+  private opening = false;
   private generation = 0;
 
   constructor(private store: FlowMonitor) {}
 
   close(): void {
     this.generation++;
+    this.opening = false;
     const close = this.closePanel;
     this.closePanel = undefined;
     this.panel?.dispose();
     this.panel = undefined;
     close?.();
+  }
+
+  /** Open automatically when Pi starts a PiFlow tool, without requiring a slash command. */
+  open(ctx: ExtensionContext): void {
+    if (this.closePanel || this.opening || !ctx.hasUI || ctx.mode !== "tui") return;
+    this.opening = true;
+    const token = ++this.generation;
+    let terminal: TUI | undefined;
+    try {
+      void ctx.ui.custom<void>((tui, theme, _keys, done) => {
+        terminal = tui;
+        this.panel = new FlowMonitorPanel(this.store, tui, theme);
+        this.closePanel = () => done();
+        this.opening = false;
+        return this.panel;
+      }, {
+        overlay: true,
+        overlayOptions: () => ({
+          anchor: "top-right",
+          width: (terminal?.terminal.columns ?? 120) < 95 ? "92%" : "45%",
+          minWidth: (terminal?.terminal.columns ?? 120) < 95 ? 28 : 44,
+          maxHeight: "90%",
+          margin: { top: 1, right: 1 },
+          nonCapturing: true,
+        }),
+      }).catch(() => {
+        // A blocked UI must not block or fail the delegated task.
+        if (token === this.generation) ctx.ui.notify("Unable to show PiFlow panel", "warning");
+      }).finally(() => {
+        if (token !== this.generation) return;
+        this.panel?.dispose();
+        this.panel = undefined;
+        this.closePanel = undefined;
+        this.opening = false;
+      });
+    } catch {
+      // Extensions must never fail the real tool because an optional panel failed.
+      if (token === this.generation) {
+        this.opening = false;
+        ctx.ui.notify("Unable to show PiFlow panel", "warning");
+      }
+    }
   }
 
   command(args: string, ctx: ExtensionCommandContext): void {
@@ -229,36 +274,12 @@ export class FlowPanelController {
       ctx.ui.notify("Usage: /flow-panel [open|close|next|prev|up|down]", "info");
       return;
     }
-    if (this.closePanel) return;
+    if (this.closePanel || this.opening) return;
     if (!ctx.hasUI || ctx.mode !== "tui") {
       ctx.ui.notify("PiFlow panel requires interactive terminal mode", "warning");
       return;
     }
 
-    const token = ++this.generation;
-    let terminal: TUI | undefined;
-    void ctx.ui.custom<void>((tui, theme, _keys, done) => {
-      terminal = tui;
-      this.panel = new FlowMonitorPanel(this.store, tui, theme);
-      this.closePanel = () => done();
-      return this.panel;
-    }, {
-      overlay: true,
-      overlayOptions: () => ({
-        anchor: "top-right",
-        width: (terminal?.terminal.columns ?? 120) < 95 ? "92%" : "45%",
-        minWidth: (terminal?.terminal.columns ?? 120) < 95 ? 28 : 44,
-        maxHeight: "90%",
-        margin: { top: 1, right: 1 },
-        nonCapturing: true,
-      }),
-    }).catch(() => {
-      ctx.ui.notify("Unable to show PiFlow panel", "warning");
-    }).finally(() => {
-      if (token !== this.generation) return;
-      this.panel?.dispose();
-      this.panel = undefined;
-      this.closePanel = undefined;
-    });
+    this.open(ctx);
   }
 }

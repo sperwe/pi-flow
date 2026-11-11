@@ -4,8 +4,11 @@ PiFlow keeps its original synchronous `run_agent` and `run_workflow` execution
 interfaces. The optional task monitor only presents execution observations; it
 does not create child agents, schedule tasks, or infer completion from activity.
 
-On Pi 1.5.1, type `/flow-panel` in the interactive prompt to toggle the panel.
-It opens at the upper right without taking keyboard focus from Pi's editor.
+On Pi 1.5.1, the panel **automatically opens** as soon as `run_agent` or
+`run_workflow` starts in an interactive Pi session. No slash command is
+necessary. It opens at the upper right without taking keyboard focus from
+Pi's editor, and remains available after the task finishes for inspection.
+You can optionally type `/flow-panel` to close or reopen it.
 `/flow-panel open` and `/flow-panel close` are explicit alternatives.
 `/flow-panel next` / `/flow-panel prev` select among retained tasks, while
 `/flow-panel up` / `/flow-panel down` move through recent activity. Open the
